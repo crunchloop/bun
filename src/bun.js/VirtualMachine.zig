@@ -51,6 +51,7 @@ smol: bool = false,
 dns_result_order: DNSResolver.Order = .verbatim,
 cpu_profiler_config: ?CPUProfilerConfig = null,
 heap_profiler_config: ?HeapProfilerConfig = null,
+coverage_output_dir: ?[]const u8 = null,
 counters: Counters = .{},
 
 hot_reload: bun.cli.Command.HotReload = .none,
@@ -858,6 +859,12 @@ pub fn onExit(this: *VirtualMachine) void {
         };
     }
 
+    // Write code coverage if BUN_COVERAGE was set
+    if (this.coverage_output_dir) |output_dir| {
+        this.coverage_output_dir = null;
+        this.writeCoverageOutput(output_dir);
+    }
+
     this.exit_handler.dispatchOnExit();
     this.is_shutting_down = true;
 
@@ -872,6 +879,110 @@ pub fn onExit(this: *VirtualMachine) void {
             hook.execute();
         }
     }
+}
+
+fn writeCoverageOutput(this: *VirtualMachine, output_dir: []const u8) void {
+    const coverage = bun.SourceMap.coverage;
+    const CodeCoverageReport = coverage.Report;
+    const map_ = coverage.ByteRangeMapping.map orelse return;
+
+    var iter = map_.valueIterator();
+    var byte_ranges = std.array_list.Managed(coverage.ByteRangeMapping).initCapacity(
+        bun.default_allocator,
+        map_.count(),
+    ) catch |err| {
+        Output.err(err, "Failed to allocate coverage data", .{});
+        return;
+    };
+    defer byte_ranges.deinit();
+
+    while (iter.next()) |entry| {
+        byte_ranges.appendAssumeCapacity(entry.*);
+    }
+
+    if (byte_ranges.items.len == 0) return;
+
+    std.sort.pdq(
+        coverage.ByteRangeMapping,
+        byte_ranges.items,
+        {},
+        coverage.ByteRangeMapping.isLessThan,
+    );
+
+    // Ensure the output directory exists
+    var node_fs = bun.jsc.Node.fs.NodeFS{};
+    _ = node_fs.mkdirRecursive(
+        .{
+            .path = bun.jsc.Node.PathLike{
+                .encoded_slice = jsc.ZigString.Slice.fromUTF8NeverFree(output_dir),
+            },
+            .always_return_none = true,
+        },
+    );
+
+    // Write lcov.info to a temp file, then atomically rename
+    var lcov_name_buf: bun.PathBuffer = undefined;
+    var shortname_buf: [512]u8 = undefined;
+    var base64_bytes: [8]u8 = undefined;
+    bun.csprng(&base64_bytes);
+    const tmpname = std.fmt.bufPrintZ(&shortname_buf, ".lcov.info.{x}.tmp", .{&base64_bytes}) catch unreachable;
+    const relative_dir = this.transpiler.fs.top_level_dir;
+    const tmp_path = bun.path.joinAbsStringBufZ(relative_dir, &lcov_name_buf, &.{ output_dir, tmpname }, .auto);
+
+    const file = switch (bun.sys.File.openat(
+        .cwd(),
+        tmp_path,
+        bun.O.CREAT | bun.O.WRONLY | bun.O.TRUNC | bun.O.CLOEXEC,
+        0o644,
+    )) {
+        .err => |err| {
+            Output.err(.lcovCoverageError, "Failed to create lcov file", .{});
+            Output.printError("\n{f}", .{err});
+            return;
+        },
+        .result => |f| f,
+    };
+
+    const buffer = bun.default_allocator.alloc(u8, 64 * 1024) catch |err| {
+        Output.err(err, "Failed to allocate coverage buffer", .{});
+        file.close();
+        return;
+    };
+    defer bun.default_allocator.free(buffer);
+    var buffered_writer = file.writer().adaptToNewApi(buffer);
+    const writer = &buffered_writer.new_interface;
+
+    for (byte_ranges.items) |*entry| {
+        var report = CodeCoverageReport.generate(this.global, bun.default_allocator, entry, false) orelse continue;
+        defer report.deinit(bun.default_allocator);
+
+        CodeCoverageReport.Lcov.writeFormat(
+            &report,
+            relative_dir,
+            writer,
+        ) catch continue;
+    }
+
+    writer.flush() catch {
+        file.close();
+        _ = bun.sys.unlink(tmp_path);
+        return;
+    };
+    file.close();
+
+    bun.sys.moveFileZ(
+        .cwd(),
+        tmp_path,
+        .cwd(),
+        bun.path.joinAbsStringZ(
+            relative_dir,
+            &.{ output_dir, "lcov.info" },
+            .auto,
+        ),
+    ) catch |err| {
+        Output.err(err, "Failed to save lcov.info file", .{});
+        _ = bun.sys.unlink(tmp_path);
+    };
 }
 
 extern fn Zig__GlobalObject__destructOnExit(*JSGlobalObject) void;

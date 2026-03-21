@@ -288,6 +288,19 @@ pub const Run = struct {
             }
         }
 
+        // Enable code coverage collection if BUN_COVERAGE is set to a directory path
+        if (vm.transpiler.env.get("BUN_COVERAGE")) |coverage_dir| {
+            if (coverage_dir.len > 0) {
+                vm.coverage_output_dir = coverage_dir;
+                vm.transpiler.options.code_coverage = true;
+                vm.transpiler.options.minify_syntax = false;
+                vm.transpiler.options.minify_identifiers = false;
+                vm.transpiler.options.minify_whitespace = false;
+                vm.transpiler.options.dead_code_elimination = false;
+                vm.global.vm().setControlFlowProfiler(true);
+            }
+        }
+
         vm.transpiler.env.loadTracy();
 
         doPreconnect(ctx.runtime_options.preconnect);
