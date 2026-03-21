@@ -136,6 +136,8 @@ pub const auto_or_run_params = [_]ParamType{
     clap.parseParam("--parallel                        Run multiple scripts concurrently with Foreman-style output") catch unreachable,
     clap.parseParam("--sequential                      Run multiple scripts sequentially with Foreman-style output") catch unreachable,
     clap.parseParam("--no-exit-on-error                Continue running other scripts when one fails (with --parallel/--sequential)") catch unreachable,
+    clap.parseParam("--coverage                        Generate a code coverage profile") catch unreachable,
+    clap.parseParam("--coverage-dir <STR>              Directory for coverage files. Defaults to 'coverage'.") catch unreachable,
 };
 
 pub const auto_only_params = [_]ParamType{
@@ -474,6 +476,10 @@ pub fn parse(allocator: std.mem.Allocator, ctx: Command.Context, comptime cmd: C
                     Global.exit(1);
                 };
             }
+        }
+
+        if (args.flag("--coverage")) {
+            ctx.runtime_options.coverage_dir = args.option("--coverage-dir") orelse "coverage";
         }
     }
 

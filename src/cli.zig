@@ -408,6 +408,7 @@ pub const Command = struct {
             name: []const u8 = "",
             dir: []const u8 = "",
         } = .{},
+        coverage_dir: ?[]const u8 = null,
     };
 
     var global_cli_ctx: Context = undefined;

@@ -288,10 +288,12 @@ pub const Run = struct {
             }
         }
 
-        // Enable code coverage collection if BUN_COVERAGE is set to a directory path
-        if (vm.transpiler.env.get("BUN_COVERAGE")) |coverage_dir| {
-            if (coverage_dir.len > 0) {
-                vm.coverage_output_dir = coverage_dir;
+        // Enable code coverage collection via --coverage flag or BUN_COVERAGE env var
+        {
+            const coverage_dir = ctx.runtime_options.coverage_dir orelse
+                if (vm.transpiler.env.get("BUN_COVERAGE")) |env_dir| (if (env_dir.len > 0) env_dir else null) else null;
+            if (coverage_dir) |dir| {
+                vm.coverage_output_dir = dir;
                 vm.transpiler.options.code_coverage = true;
                 vm.transpiler.options.minify_syntax = false;
                 vm.transpiler.options.minify_identifiers = false;
